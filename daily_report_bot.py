@@ -106,13 +106,14 @@ def send_feishu_card(webhook_url, data):
     elements.append({
         "tag": "div", 
         "text": {
+            # 修复后的 data['fastmoss_link'] 现在可以直接访问
             "tag": "lark_md", 
             "content": f"👉 [点击查看 FastMoss 实时榜单 (需登录)]({data['fastmoss_link']})\n*(注: 脚本无法自动登录 FastMoss，以下展示相关热销资讯)*"
         }
     })
     
-    tiktok_items, _ = data['tiktok_shop']
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": make_list_text(tiktok_items)}})
+    # 修复后的 data['tiktok_shop'] 只是 news_items 列表
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": make_list_text(data['tiktok_shop'])}})
     elements.append({"tag": "hr"}) # 分割线
 
     # --- 第二板块：日本乐天爆款 ---
@@ -164,14 +165,18 @@ def main():
         return
 
     # 1. 并行获取各项数据 (顺序执行)
-    tiktok_shop_data = get_tiktok_shop_trends()
+    # 接收两个返回值的元组，并解包到两个变量中
+    tiktok_news_items, fastmoss_link = get_tiktok_shop_trends() 
     rakuten_data = get_rakuten_ranking()
     amazon_data = get_amazon_ranking()
     news_data = get_ec_tiktok_news()
 
     # 2. 整合数据包
     all_data = {
-        "tiktok_shop": tiktok_shop_data,
+        # 现在 tiktok_shop 存的是新闻列表
+        "tiktok_shop": tiktok_news_items,
+        # 新增 fastmoss_link 键值对
+        "fastmoss_link": fastmoss_link, 
         "rakuten": rakuten_data,
         "amazon": amazon_data,
         "news": news_data
