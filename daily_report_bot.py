@@ -202,7 +202,7 @@ def send_feishu_card(webhook_url, data):
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     template_color = "blue" 
     
-    # 辅助函数：生成列表文本 (关键：强制显示中文，日文/英文作为链接文本)
+    # 辅助函数：生成列表文本 (关键：强制显示中文，链接文本也改为纯中文的[查看原文])
     def make_list_text(items, is_translated=True):
         if not items:
             return "暂无数据更新或抓取失败，请检查关键词或稍后重试。"
@@ -210,17 +210,19 @@ def send_feishu_card(webhook_url, data):
         txt = ""
         for i, item in enumerate(items):
             link = item['link']
-            title_jp = item['title_jp']
+            title_jp = item['title_jp'] # 原始日文/英文标题
             
             if not is_translated:
                 # 热门标签词，只显示日文/英文原文作为链接文本
+                # 为了保持“全中文”的承诺，这里不做翻译的标签词板块应保持原样，或者完全隐藏。
+                # 考虑到用户需求是“全中文”，我们保持原样，但在说明中强调这是英文/日文标签。
                 txt += f"{i+1}. [{title_jp}]({link})\n"
             else:
-                # 其他所有板块：强制显示中文翻译作为标题，日文原文作为链接文本
+                # 其他所有板块：强制显示中文翻译作为标题，链接文本改为 [查看原文]
                 title_display = item['title_cn'] if item['title_cn'] else "翻译失败内容"
                 
-                # 关键：**中文标题** 确保了加粗和突出，解决了您截图中的问题
-                txt += f"{i+1}. **{title_display}** [日文原文]({link})\n"
+                # 关键修改：将 [日文原文] 统一改为 [查看原文]
+                txt += f"{i+1}. **{title_display}** [查看原文]({link})\n"
                 
         return txt
 
@@ -236,7 +238,7 @@ def send_feishu_card(webhook_url, data):
     # 2. 日本 TikTok 热门标签词 (Top 2)
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🎵 **2. 日本 TikTok 热门标签词 (Hashtag Trends - 5条)**"}})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": make_list_text(data['tiktok_hashtag'], is_translated=False)}})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "*(注: 标签词保持日文/英文原文，点击查看详情)*"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "*(注: 标签词因无中文译名，保留日文/英文原文，点击查看详情)*"}})
     elements.append({"tag": "hr"})
 
     # 3. 日本乐天 (Rakuten) 精选榜单 (Top 3)
