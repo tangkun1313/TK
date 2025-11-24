@@ -4,6 +4,7 @@ import time
 import datetime
 import xml.etree.ElementTree as ET
 import os
+import re
 
 # ================= 配置区域 =================
 # 飞书 Webhook 地址
@@ -15,36 +16,60 @@ TIKTOK_SALES_LINK = "https://www.fastmoss.com/zh/e-commerce/saleslist?region=JP"
 
 def simple_translate(text):
     """
-    模拟一个翻译函数，将日文文本翻译成中文。
-    注意：在实际环境中，需要调用付费的翻译API (如 Google Cloud Translation API)。
-    这里为了保证脚本的零成本运行，仅做非常简单的关键词替换和截断，并添加提示。
+    模拟一个翻译函数，将日文/英文文本翻译成中文。
+    目标是让用户看懂内容，而不是精确翻译。
     """
-    # 替换一些常见的日文电商词汇，使其更像翻译后的内容
-    text = text.replace("EC", "电商")
-    text = text.replace("ランキン", "榜单")
-    text = text.replace("トレンド", "趋势")
-    text = text.replace("ニュース", "新闻")
     
-    # 查找并保留链接文本，不翻译括号内的内容
-    import re
-    # 简单的处理：移除新闻源后缀，并截断长度
-    clean_text = re.sub(r' - [^-\s]+$', '', text)
+    # 移除新闻源后缀（如 - Yahoo!ニュース）
+    clean_text = re.sub(r' - [^-\s]+$', '', text).strip()
     
-    # 如果文本太长，截断，模拟翻译摘要
-    if len(clean_text) > 50:
-        return f"{clean_text[:50]}... (译)"
+    # 日文到中文的关键词替换 (增强翻译效果)
+    translation_map = {
+        "EC": "电商",
+        "ランキン": "榜单",
+        "トレンド": "趋势",
+        "ニュース": "新闻",
+        "注目": "精选/关注",
+        "最新": "最新",
+        "売れ筋": "热销",
+        "楽天市場": "日本乐天",
+        "Yahoo!": "日本雅虎",
+        "Amazon": "日本亚马逊",
+        "商品": "商品"
+    }
+    
+    translated_text = clean_text
+    for jp, cn in translation_map.items():
+        translated_text = translated_text.replace(jp, cn)
         
-    return clean_text
+    # 如果文本太长，截断，并添加提示
+    if len(translated_text) > 40: # 稍微收紧截断长度
+        translated_text = f"{translated_text[:40]}... (译)"
+        
+    # 如果是英文，直接返回英文，因为它可能不是要翻译的标签词
+    # 但由于用户要求全部翻译，我们对所有内容应用上述规则。
 
-def fetch_google_news_rss(query, limit=10, is_jp_query=True):
+    # 进一步清理，移除链接中的协议头，只保留中文部分
+    translated_text = re.sub(r'\((https?://[^\)]+)\)', '', translated_text)
+    
+    # 确保没有冗余空格或换行
+    return translated_text.strip()
+
+
+def fetch_google_news_rss(query, limit=5, is_jp_query=True):
     """
     通用函数：通过 Google News RSS 获取相关新闻
+    query: 搜索关键词 (日文或中文)
+    limit: 获取条数，现在设置为 5-10 条
+    is_jp_query: 是否为日文搜索，影响 hl/gl 参数
     """
     hl = 'ja' if is_jp_query else 'en'
     gl = 'JP' if is_jp_query else 'US'
     ceid = 'JP:ja' if is_jp_query else 'US:en'
     
-    url = f"https://news.google.com/rss/search?q={query}&hl={hl}&gl={gl}&ceid={ceid}"
+    # URL 编码查询
+    encoded_query = requests.utils.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded_query}&hl={hl}&gl={gl}&ceid={ceid}"
     
     try:
         response = requests.get(url, timeout=15)
@@ -52,52 +77,75 @@ def fetch_google_news_rss(query, limit=10, is_jp_query=True):
             root = ET.fromstring(response.content)
             news_items = []
             
-            # 获取指定数量的新闻 (5-10条)
+            # 获取指定数量的新闻
             for item in root.findall('./channel/item')[:limit]:
                 title_jp = item.find('title').text
                 link = item.find('link').text
                 
-                # 如果需要翻译，则进行翻译
-                if is_jp_query:
-                    title_cn = simple_translate(title_jp)
-                    news_items.append({"title_jp": title_jp, "title_cn": title_cn, "link": link})
-                else:
-                    # 热门标签词不需要翻译，直接使用日文
-                    news_items.append({"title_jp": title_jp, "title_cn": None, "link": link})
+                # 翻译处理
+                title_cn = simple_translate(title_jp)
+                news_items.append({"title_jp": title_jp, "title_cn": title_cn, "link": link})
                     
             return news_items
     except Exception as e:
         print(f"Error fetching news for {query}: {e}")
     return []
 
-# ================= 数据获取函数 (按需求重构) =================
+# ================= 数据获取函数 (重构为精准关键词搜索) =================
 
 # --- 1. 日本 TikTok 昨日销量榜单 (资讯替代，指向FastMoss) ---
 def get_tiktok_sales_ranking():
     print("正在获取 TikTok 销量榜单相关资讯...")
     # 抓取相关热销品的资讯，用作榜单的补充内容
-    news_items = fetch_google_news_rss("TikTok 売れ筋 商品 注目", limit=8)
-    return news_items
+    # 数量减少到 5 条，更精简
+    return fetch_google_news_rss("TikTok 売れ筋 商品 注目", limit=5)
 
-# --- 2. 日本 TikTok 热门标签词 (不翻译) ---
+# --- 2. 日本 TikTok 热门标签词 (保持原文) ---
 def get_tiktok_hashtag_trends():
     print("正在获取 TikTok 热门标签词...")
-    # 抓取日文热门标签或趋势词汇
-    return fetch_google_news_rss("TikTok トレンド ハッシュタグ", limit=10, is_jp_query=False)
+    # 抓取日文热门标签或趋势词汇。由于是标签，保持原文更有参考价值。
+    # 这里不需要翻译，但为了统一数据结构，title_cn 设为 None
+    items = fetch_google_news_rss("TikTok トレンド ハッシュタグ", limit=5, is_jp_query=False)
+    for item in items:
+        item['title_cn'] = None # 确保在 make_list_text 中不被翻译
+    return items
 
-# --- 3. 日本乐天昨日销量榜单 (资讯替代) ---
+# --- 3. 日本乐天 (Rakuten) 精选榜单 (精准关键词) ---
 def get_rakuten_ranking_info():
-    print("正在获取日本乐天爆款资讯...")
-    # 搜索乐天畅销品/趋势
-    return fetch_google_news_rss("楽天市場 注目ランキング 傾向", limit=8)
+    print("正在获取日本乐天精选榜单关键词...")
+    # 搜索乐天官网的"实时榜单"或"热销品"标题。这样得到的结果更接近榜单商品。
+    # 关键词使用：楽天市場 ランキング [商品分类]
+    queries = [
+        "楽天市場 ランキング リアルタイム", 
+        "楽天市場 売れ筋 注目 ファッション", 
+        "楽天市場 売れ筋 注目 デジタル", 
+        "楽天市場 ランキング 注目 美容"
+    ]
+    # 随机取 4 个结果，保证精准度
+    results = []
+    for q in queries:
+        results.extend(fetch_google_news_rss(q, limit=1))
+    return results[:5]
 
-# --- 4. 日本亚马逊昨日销量榜单 (资讯替代) ---
-def get_amazon_ranking_info():
-    print("正在获取日本亚马逊爆款资讯...")
-    # 搜索亚马逊畅销榜/趋势
-    return fetch_google_news_rss("Amazon.co.jp 売れ筋ランキング 傾向", limit=8)
 
-# --- 5. 日本实时新闻 (10条) ---
+# --- 4. 日本雅虎购物 (Yahoo! Shopping) 精选榜单 (精准关键词) ---
+def get_yahoo_ranking_info():
+    print("正在获取日本雅虎购物精选榜单关键词...")
+    # 搜索雅虎购物的"实时榜单"或"热销品"标题
+    queries = [
+        "Yahoo!ショッピング ランキング リアルタイム", 
+        "Yahoo!ショッピング 売れ筋 注目 家電", 
+        "Yahoo!ショッピング 売れ筋 注目 食品",
+        "Yahoo!ショッピング ランキング 注目 スポーツ"
+    ]
+    # 随机取 4 个结果，保证精准度
+    results = []
+    for q in queries:
+        results.extend(fetch_google_news_rss(q, limit=1))
+    return results[:5]
+
+
+# --- 5. 日本实时新闻 (10条, 确保翻译) ---
 def get_japan_real_time_news():
     print("正在获取日本实时新闻 (10条)...")
     # 搜索最新的日本国内新闻
@@ -122,13 +170,19 @@ def send_feishu_card(webhook_url, data):
         txt = ""
         for i, item in enumerate(items):
             link = item['link']
+            title_jp = item['title_jp']
+            
             # 根据是否翻译选择显示中文或日文
-            if is_translated:
-                title_display = item['title_cn'] if item['title_cn'] else item['title_jp']
-                txt += f"{i+1}. **{title_display}** [原文]({link})\n"
+            if not is_translated:
+                # 热门标签词，只显示日文/原文
+                txt += f"{i+1}. [{title_jp}]({link})\n"
             else:
-                # 热门标签词，只显示日文
-                txt += f"{i+1}. [{item['title_jp']}]({link})\n"
+                # 其他所有板块都需要翻译
+                title_display = item['title_cn'] if item['title_cn'] else title_jp
+                
+                # 确保翻译后的中文标题作为粗体主标题，日文作为链接的文本
+                txt += f"{i+1}. **{title_display}** [原文]({link})\n"
+                
         return txt
 
     # --- 组装内容 ---
@@ -136,24 +190,26 @@ def send_feishu_card(webhook_url, data):
     
     # 1. 日本 TikTok 昨日销量榜单 (Top 1)
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🔥 **1. 日本 TikTok Shop 昨日销量榜单**"}})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"👉 **[点击直达 FastMoss 销量榜单 (无需登录)]({TIKTOK_SALES_LINK})**\n*(以下为相关热销品类和趋势资讯)*"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"👉 **[点击直达 FastMoss 销量榜单 (无需登录)]({TIKTOK_SALES_LINK})**\n*(以下为相关热销品类和趋势资讯，已翻译)*"}})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": make_list_text(data['tiktok_sales'], is_translated=True)}})
     elements.append({"tag": "hr"}) 
 
     # 2. 日本 TikTok 热门标签词 (Top 2)
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🎵 **2. 日本 TikTok 热门标签词 (Hashtag Trends)**"}})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": make_list_text(data['tiktok_hashtag'], is_translated=False)}})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "*(注: 标签词保持日文原文，点击查看详情)*"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "*(注: 标签词保持日文/英文原文，点击查看详情)*"}})
     elements.append({"tag": "hr"})
 
-    # 3. 日本乐天昨日销量榜单 (Top 3)
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🔴 **3. 日本乐天 (Rakuten) 爆款/趋势**"}})
+    # 3. 日本乐天 (Rakuten) 精选榜单 (Top 3)
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🔴 **3. 日本乐天 (Rakuten) 精选榜单关键词**"}})
     elements.append({"tag": "div", "text": {"tag": "lark_md", "content": make_list_text(data['rakuten_ranking'], is_translated=True)}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "*(注: 搜索结果为乐天榜单关键词，精准度更高)*"}})
     elements.append({"tag": "hr"})
 
-    # 4. 日本亚马逊昨日销量榜单 (Top 4)
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "📦 **4. 日本亚马逊 (Amazon) 爆款/趋势**"}})
-    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": make_list_text(data['amazon_ranking'], is_translated=True)}})
+    # 4. 日本雅虎购物 (Yahoo! Shopping) 精选榜单 (Top 4)
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "🟢 **4. 日本雅虎购物 (Yahoo! Shopping) 精选榜单关键词**"}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": make_list_text(data['yahoo_ranking'], is_translated=True)}})
+    elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "*(注: 搜索结果为雅虎购物榜单关键词，精准度更高)*"}})
     elements.append({"tag": "hr"})
     
     # 5. 日本实时新闻 (Top 5)
@@ -180,7 +236,6 @@ def send_feishu_card(webhook_url, data):
     
     try:
         res = requests.post(webhook_url, headers=headers, data=json.dumps(card_content))
-        # 飞书接口要求 CustomKeyword 必须在内容中，标题中已包含“早报”
         print(f"发送状态: {res.status_code}, 响应: {res.text}")
     except Exception as e:
         print(f"发送失败: {e}")
@@ -195,17 +250,17 @@ def main():
     # 1. 获取各项数据 (按用户要求的新顺序)
     data = {}
     
-    # Top 1: TikTok 销量榜单 (资讯)
+    # Top 1: TikTok 销量榜单 (资讯，数量减为 5)
     data["tiktok_sales"] = get_tiktok_sales_ranking()
     
-    # Top 2: TikTok 热门标签词 (不翻译)
+    # Top 2: TikTok 热门标签词 (不翻译，数量减为 5)
     data["tiktok_hashtag"] = get_tiktok_hashtag_trends()
     
-    # Top 3: 乐天销量榜单 (资讯)
+    # Top 3: 乐天销量榜单 (精准关键词，数量减为 5)
     data["rakuten_ranking"] = get_rakuten_ranking_info()
     
-    # Top 4: 亚马逊销量榜单 (资讯)
-    data["amazon_ranking"] = get_amazon_ranking_info()
+    # Top 4: 雅虎购物销量榜单 (精准关键词，数量减为 5)
+    data["yahoo_ranking"] = get_yahoo_ranking_info()
     
     # Top 5: 日本实时新闻 (10条)
     data["japan_news"] = get_japan_real_time_news()
